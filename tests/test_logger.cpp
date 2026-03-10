@@ -38,7 +38,7 @@ protected:
     void SetUp() override {
         strncpy(tmp_dir, "/tmp/logger_test_XXXXXX", sizeof(tmp_dir) - 1);
         mkdtemp(tmp_dir);
-        snprintf(config_path, sizeof(config_path), "%s/test.ini", tmp_dir);
+        snprintf(config_path, sizeof(config_path), "%.240s/test.ini", tmp_dir);
         write_test_config(config_path);
     }
 

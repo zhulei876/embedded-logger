@@ -6,6 +6,8 @@ project(EmbeddedLogger
     LANGUAGES   C CXX
 )
 
+add_compile_definitions(_GNU_SOURCE)
+
 # ============================================================================
 # Global C Standard
 # ============================================================================

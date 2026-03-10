@@ -213,23 +213,7 @@ static LOGGER_RET_E sc_write_all(int fd, const void *buf, size_t len)
 /* =========================================================================
  * 内部逻辑
  * ========================================================================= */
-
-/** 生成新日志文件路径：<dir>/log-YYYYMMDD-HHMMSS.txt */
-static void make_log_filename(const char *dir,
-                               char       *out_path,
-                               size_t      path_size)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-    snprintf(out_path, path_size,
-             "%s/log-%04d%02d%02d-%02d%02d%02d.txt",
-             dir,
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
-}
-
+ 
 /**
  * @brief  确保存储目录存在。
  *
@@ -250,7 +234,7 @@ static LOGGER_RET_E ensure_dir(const char *dir)
     return LOGGER_ERR_IO;
 }
 
-/** 创建并打开一个新的日志文件（轮转时调用）。 */
+/** 创建并打开一个新的日志文件（包含同一秒内的溢出后缀逻辑）。 */
 static LOGGER_RET_E open_new_file(void)
 {
     if (g_storage.current_fd >= 0) {
@@ -258,16 +242,59 @@ static LOGGER_RET_E open_new_file(void)
         g_storage.current_fd = -1;
     }
 
-    make_log_filename(g_storage.cfg.storage_dir,
-                      g_storage.current_path,
-                      sizeof(g_storage.current_path));
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
 
+    int overflow_index = 0;
+
+    /* 寻找当前秒内可用的文件名 */
+    while (1) {
+        if (overflow_index == 0) {
+            /* 默认标准格式 */
+            snprintf(g_storage.current_path, sizeof(g_storage.current_path),
+                     "%s/log-%04d%02d%02d-%02d%02d%02d.txt",
+                     g_storage.cfg.storage_dir,
+                     tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+        } else {
+            /* 同一秒内文件被打满，触发 _1, _2 等溢出后缀 */
+            snprintf(g_storage.current_path, sizeof(g_storage.current_path),
+                     "%s/log-%04d%02d%02d-%02d%02d%02d_%d.txt",
+                     g_storage.cfg.storage_dir,
+                     tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec,
+                     overflow_index);
+        }
+
+        struct sc_statx st;
+        /* 使用裸系统调用 sc_statx 检测文件状态 */
+        if (sc_statx(g_storage.current_path, &st) == 0) {
+            /* 如果文件已存在并且达到了单文件大小上限，尝试下一个后缀编号 */
+            if (st.stx_size >= g_storage.cfg.max_file_size) {
+                overflow_index++;
+                continue;
+            }
+        }
+        /* 找到一个不存在，或者存在但还没满的文件名，跳出循环 */
+        break;
+    }
+
+    /* 打开找到的合法文件（追加模式） */
     g_storage.current_fd = sc_openat(g_storage.current_path,
                                       O_WRONLY | O_CREAT | O_APPEND,
                                       0644);
     if (g_storage.current_fd < 0) return LOGGER_ERR_IO;
 
-    g_storage.current_size = 0;
+    /* 继承原有大小，保证追加写入时容量计算依然准确 */
+    struct sc_statx st2;
+    if (sc_statx(g_storage.current_path, &st2) == 0) {
+        g_storage.current_size = st2.stx_size;
+    } else {
+        g_storage.current_size = 0;
+    }
+
     return LOGGER_OK;
 }
 
@@ -318,7 +345,7 @@ static uint32_t collect_log_files(LogFileInfo *out_infos, uint32_t max_count)
             out_infos[count].filepath[sizeof(out_infos[count].filepath)-1] = '\0';
 
             out_infos[count].size_bytes = (size_t)st.stx_size;
-            out_infos[count].created_ts = (uint64_t)st.stx_mtime.tv_sec;
+            out_infos[count].created_ts = (uint64_t)st.stx_mtime.tv_sec * 1000ULL + (st.stx_mtime.tv_nsec / 1000000U);
             count++;
         }
     }

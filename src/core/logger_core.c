@@ -160,11 +160,11 @@ static LOGGER_RET_E load_config_ini(const char *path, LoggerConfig *cfg)
                         cfg->storage.encrypt_files = (atoi(val) != 0);
                 } else if (strcmp(section, "transport") == 0) {
                     if      (strcmp(key, "bind_ip") == 0)
-                        snprintf(cfg->transport.bind_ip, sizeof(cfg->transport.bind_ip), "%s", val);
+                        snprintf(cfg->transport.bind_ip, sizeof(cfg->transport.bind_ip), "%.63s", val);
                     else if (strcmp(key, "bind_port") == 0)
                         cfg->transport.bind_port = (uint16_t)atoi(val);
                     else if (strcmp(key, "remote_ip") == 0)
-                        snprintf(cfg->transport.remote_ip, sizeof(cfg->transport.remote_ip), "%s", val);
+                        snprintf(cfg->transport.remote_ip, sizeof(cfg->transport.remote_ip), "%.63s", val);
                     else if (strcmp(key, "remote_port") == 0)
                         cfg->transport.remote_port = (uint16_t)atoi(val);
                     else if (strcmp(key, "send_interval_ms") == 0)

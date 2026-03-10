@@ -237,7 +237,7 @@ LOGGER_RET_E crash_handler_install(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = crash_signal_handler;
-    sa.sa_flags     = SA_SIGINFO | SA_RESETHAND;
+    sa.sa_flags     = (int)(SA_SIGINFO | SA_RESETHAND);;
     sigemptyset(&sa.sa_mask);
 
     for (int i = 0; i < NUM_CRASH_SIGS; i++) {

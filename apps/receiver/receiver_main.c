@@ -98,7 +98,7 @@ static void load_receiver_config(const char *path)
             char *k = key + strlen(key) - 1;
             while (k > key && *k == ' ') *k-- = '\0';
 
-if      (!strcmp(key, "bind_ip"))     snprintf(g_rcfg.bind_ip, sizeof(g_rcfg.bind_ip), "%s", val);
+if      (!strcmp(key, "bind_ip"))     snprintf(g_rcfg.bind_ip, sizeof(g_rcfg.bind_ip), "%.63s", val);
             else if (!strcmp(key, "bind_port"))   g_rcfg.bind_port = (uint16_t)atoi(val);
             else if (!strcmp(key, "min_level"))   g_rcfg.min_level = (LOGGER_LEVEL_E)atoi(val);
             else if (!strcmp(key, "color_output"))g_rcfg.color_output = atoi(val) != 0;
