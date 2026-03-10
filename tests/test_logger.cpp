@@ -37,7 +37,7 @@ protected:
 
     void SetUp() override {
         strncpy(tmp_dir, "/tmp/logger_test_XXXXXX", sizeof(tmp_dir) - 1);
-        mkdtemp(tmp_dir);
+        EXPECT_NE(mkdtemp(tmp_dir), nullptr);
         snprintf(config_path, sizeof(config_path), "%.240s/test.ini", tmp_dir);
         write_test_config(config_path);
     }
@@ -47,7 +47,7 @@ protected:
         /* Cleanup temp dir */
         char cmd[512];
         snprintf(cmd, sizeof(cmd), "rm -rf %s", tmp_dir);
-        system(cmd);
+        if (system(cmd)) {};
     }
 
     void write_test_config(const char *path) {
@@ -109,7 +109,7 @@ TEST_F(LoggerTest, LevelFiltering) {
 TEST_F(LoggerTest, StorageWriteAndList) {
     LoggerStorageCfg cfg;
     memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.storage_dir, tmp_dir, sizeof(cfg.storage_dir) - 1);
+    snprintf(cfg.storage_dir, sizeof(cfg.storage_dir), "%s", tmp_dir);
     cfg.max_file_size  = 65536;
     cfg.max_total_size = 262144;
     cfg.encrypt_files  = false;
@@ -130,7 +130,7 @@ TEST_F(LoggerTest, StorageWriteAndList) {
 TEST_F(LoggerTest, StorageRotationOnSizeLimit) {
     LoggerStorageCfg cfg;
     memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.storage_dir, tmp_dir, sizeof(cfg.storage_dir) - 1);
+    snprintf(cfg.storage_dir, sizeof(cfg.storage_dir), "%s", tmp_dir);
     cfg.max_file_size  = 256;    /* Very small to force rotation */
     cfg.max_total_size = 4096;
     cfg.encrypt_files  = false;
@@ -156,7 +156,7 @@ TEST_F(LoggerTest, StorageRotationOnSizeLimit) {
 TEST_F(LoggerTest, StorageTotalSizeEviction) {
     LoggerStorageCfg cfg;
     memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.storage_dir, tmp_dir, sizeof(cfg.storage_dir) - 1);
+    snprintf(cfg.storage_dir, sizeof(cfg.storage_dir), "%s", tmp_dir);
     cfg.max_file_size  = 128;
     cfg.max_total_size = 512;   /* Allow only ~4 files */
     cfg.encrypt_files  = false;
