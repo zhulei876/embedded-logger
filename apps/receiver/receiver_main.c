@@ -1,26 +1,11 @@
 /**
  * @file    receiver_main.c
- * @brief   UDP Log Receiver Application
- *
- * Listens on a UDP port for log packets from the sender.
- * Supports:
- *  - Level filtering (only show entries at/above configured min_level)
- *  - Query commands: list files, read file
- *  - Colored terminal output by log level
- *
- * Configuration: config/receiver.ini
- *   [receiver]
- *   bind_ip        = 127.0.0.1
- *   bind_port      = 9001
- *   min_level      = 0        ; 0=EMERG ... 7=DEBUG (show all ≤ this level)
- *   color_output   = 1
- *
- * Build: cmake --build build --target log_receiver
- * Run:   ./log_receiver [receiver.ini]
+ * @brief   UDP Log Receiver Application (带本地存储归档功能)
  */
 
 #include "logger_transport.h"
 #include "logger_crypto.h"
+#include "logger_storage.h"  /* 新增：引入本地存储模块 */
 #include "logger.h"
 
 #include <stdio.h>
@@ -67,14 +52,23 @@ typedef struct {
     bool     color_output;
     bool     decrypt;
     char     key_file[256];
+    /* 新增：接收端本地存储配置 */
+    char     storage_dir[256];
+    size_t   max_file_size;
+    size_t   max_total_size;
 } ReceiverConfig;
 
+/* 默认配置 */
 static ReceiverConfig g_rcfg = {
-    .bind_ip      = "127.0.0.1",
-    .bind_port    = 9001,
-    .min_level    = MSG_DEBUG,
-    .color_output = true,
-    .decrypt      = false,
+    .bind_ip        = "127.0.0.1",
+    .bind_port      = 9001,
+    .min_level      = MSG_DEBUG,
+    .color_output   = true,
+    .decrypt        = false,
+    .key_file       = "",
+    .storage_dir    = "/tmp/server_logs", /* 默认存到这个目录 */
+    .max_file_size  = 1048576,            /* 默认 1MB 轮转 */
+    .max_total_size = 10485760            /* 默认总大小 10MB */
 };
 
 static void load_receiver_config(const char *path)
@@ -98,16 +92,19 @@ static void load_receiver_config(const char *path)
             char *k = key + strlen(key) - 1;
             while (k > key && *k == ' ') *k-- = '\0';
 
-if      (!strcmp(key, "bind_ip"))     snprintf(g_rcfg.bind_ip, sizeof(g_rcfg.bind_ip), "%.63s", val);
-            else if (!strcmp(key, "bind_port"))   g_rcfg.bind_port = (uint16_t)atoi(val);
-            else if (!strcmp(key, "min_level"))   g_rcfg.min_level = (LOGGER_LEVEL_E)atoi(val);
-            else if (!strcmp(key, "color_output"))g_rcfg.color_output = atoi(val) != 0;
-            else if (!strcmp(key, "decrypt"))     g_rcfg.decrypt = atoi(val) != 0;
-            else if (!strcmp(key, "key_file"))    snprintf(g_rcfg.key_file, sizeof(g_rcfg.key_file), "%s", val);
+            if      (!strcmp(key, "bind_ip"))        snprintf(g_rcfg.bind_ip, sizeof(g_rcfg.bind_ip), "%.63s", val);
+            else if (!strcmp(key, "bind_port"))      g_rcfg.bind_port = (uint16_t)atoi(val);
+            else if (!strcmp(key, "min_level"))      g_rcfg.min_level = (LOGGER_LEVEL_E)atoi(val);
+            else if (!strcmp(key, "color_output"))   g_rcfg.color_output = atoi(val) != 0;
+            else if (!strcmp(key, "decrypt"))        g_rcfg.decrypt = atoi(val) != 0;
+            else if (!strcmp(key, "key_file"))       snprintf(g_rcfg.key_file, sizeof(g_rcfg.key_file), "%.255s", val);
+            /* 新增解析存储配置 */
+            else if (!strcmp(key, "storage_dir"))    snprintf(g_rcfg.storage_dir, sizeof(g_rcfg.storage_dir), "%.255s", val);
+            else if (!strcmp(key, "max_file_size"))  g_rcfg.max_file_size = (size_t)atol(val);
+            else if (!strcmp(key, "max_total_size")) g_rcfg.max_total_size = (size_t)atol(val);
         }
         line = end ? end + 1 : NULL;
     }
-    
 }
 
 /* =========================================================================
@@ -134,7 +131,6 @@ static void print_log_line(const char *line, size_t len)
 {
     LOGGER_LEVEL_E level = detect_level(line);
 
-    /* Filter: only show if level <= min_level (lower enum = higher priority) */
     if (level > g_rcfg.min_level) return;
 
     if (g_rcfg.color_output) {
@@ -202,6 +198,21 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* 新增：初始化本地存储模块 */
+    LoggerStorageCfg scfg;
+    memset(&scfg, 0, sizeof(scfg));
+    snprintf(scfg.storage_dir, sizeof(scfg.storage_dir), "%.255s", g_rcfg.storage_dir);
+    scfg.max_file_size = g_rcfg.max_file_size;
+    scfg.max_total_size = g_rcfg.max_total_size;
+    scfg.encrypt_files = false; /* 存储在云端本地的文件默认保存为明文 */
+
+    if (storage_init(&scfg) != LOGGER_OK) {
+        fprintf(stderr, "[RECEIVER] Failed to initialize local storage at %s\n", scfg.storage_dir);
+        /* 不退出，即使存储失败也可以继续在屏幕上打印日志 */
+    } else {
+        printf("[RECEIVER] Local storage enabled. Saving logs to: %s\n", scfg.storage_dir);
+    }
+
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
         perror("[RECEIVER] socket");
@@ -255,6 +266,7 @@ int main(int argc, char *argv[])
         uint8_t *dec_buf = NULL;
         size_t   dec_len = 0;
 
+        /* 这里就是解密逻辑：加密包被解密后，work 指向了真正的明文 */
         if ((hdr->flags & 0x01) && g_rcfg.decrypt && plen > 0) {
             if (crypto_decrypt(payload, plen, &dec_buf, &dec_len) == LOGGER_OK) {
                 work = dec_buf;
@@ -268,9 +280,15 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        /* 处理解密后并且 CRC 正确的最终数据 */
         if (hdr->type == PKT_LOG_ENTRY && plen > 0) {
             work[plen] = '\0';
+            
+            /* 1. 打印到屏幕 */
             print_log_line((char *)work, plen);
+            
+            /* 2. 新增：将解密后的完整明文写入本地云服务器磁盘！ */
+            storage_write((const char *)work, plen);
         }
 
         if (dec_buf) crypto_free(dec_buf);
@@ -278,6 +296,10 @@ int main(int argc, char *argv[])
 
     printf("\n[RECEIVER] Shutting down.\n");
     if (g_rcfg.decrypt) crypto_destroy();
+    
+    /* 新增：关闭存储系统 */
+    storage_destroy();
     close(fd);
     return EXIT_SUCCESS;
 }
+
